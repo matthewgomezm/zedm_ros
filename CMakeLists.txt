@@ -14,10 +14,10 @@ find_package(cv_bridge REQUIRED)
 find_package(image_transport REQUIRED)
 
 # 2. Define the Executable
-add_executable(depth_node src/main.cpp)
+add_executable(ORL_node src/main.cpp)
 
 # 3. Link Dependencies to the Executable
-ament_target_dependencies(depth_node
+ament_target_dependencies(ORL_node
   rclcpp
   sensor_msgs
   point_cloud_transport
@@ -26,7 +26,7 @@ ament_target_dependencies(depth_node
 )
 
 # 4. Install Rules
-install(TARGETS depth_node
+install(TARGETS ORL_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
