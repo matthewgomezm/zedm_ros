@@ -1,103 +1,98 @@
-// Copyright 2025 Stereolabs
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-
-
 #include "rclcpp/rclcpp.hpp"
-#include "sensor_msgs/msg/image.hpp"
+#include "sensor_msgs/msg/point_cloud2.hpp"
+#include <pcl_conversions/pcl_conversions.h>
+#include <pcl/point_cloud.h>
+#include <pcl/point_types.h>
+#include <pcl/common/common.h>
 
-using namespace std::placeholders;
-using namespace std;
-
-class MinimalDepthSubscriber : public rclcpp::Node
+class PointCloudORL : public rclcpp::Node
 {
 public:
-  MinimalDepthSubscriber()
-  : Node("ORL_node")
+  PointCloudORL() : Node("ORLcloud")
   {
-    /* Note: it is very important to use a QOS profile for the subscriber that
-     * is compatible with the QOS profile of the publisher. The ZED component
-     * node uses a default QoS profile with reliability set as "RELIABLE" and
-     * durability set as "VOLATILE". To be able to receive the subscribed topic
-     * the subscriber must use compatible parameters.
-     */
+    // Qos settings
+    rclcpp::QoS qos(10);
+    qos.best_effort();
 
-    // https://github.com/ros2/ros2/wiki/About-Quality-of-Service-Settings
+    // create subscription from zed
+    sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
+      "/zed/zed_node/point_cloud/cloud_registered",
+      qos, // in terminal command specify draco compression subscription
+      std::bind(&PointCloudORL::cloudCallback, this, std::placeholders::_1)
+    );
 
-    rclcpp::QoS depth_qos(10);
-
-    auto sub_opt = rclcpp::SubscriptionOptions();
-
-    // Create depth map subscriber
-    mDepthSub = create_subscription<sensor_msgs::msg::Image>(
-      "depth", depth_qos,
-      std::bind(&MinimalDepthSubscriber::depthCallback, this, _1), sub_opt);
+    // publish the math cloud
+    pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("ORLcloud", 10);
+    
+    RCLCPP_INFO(this->get_logger(), "Subscribed to: /zed/zed_node/point_cloud/cloud_registered");
+    RCLCPP_INFO(this->get_logger(), "Publishing to: /ORLcloud");
   }
 
-protected:
-void depthCallback(const sensor_msgs::msg::Image::SharedPtr msg)
-{
-    // Reinterpret raw bytes as floats
-    float * depths = reinterpret_cast<float *>(&msg->data[0]);
+private:
+  void cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
+  {
+    pcl::PointCloud<pcl::PointXYZRGB> input_cloud; //convert raw cloud to PCL cloud
+    pcl::fromROSMsg(*msg, input_cloud);
 
-    int width = msg->width;
-    int height = msg->height;
+    if (input_cloud.empty()) 
+      return;
 
-    // Center coordinates
-    int center_u = width / 2;
-    int center_v = height / 2;
+    pcl::PointCloud<pcl::PointXYZRGB> display_cloud;
+    
+    float z_ref = 1000.0f;
+    float z1 = -1000.0f;  
+    int valid_points = 0;
 
-    // We want a 5x5 matrix, so we look at 2 pixels in every direction
-    int offset = 2; 
+    const float MIN_DIST = 0.1f;  // 1 meter away
+    const float MAX_DIST = 2.5f;  // 2.5 meters away
+    const float WIDTH = 0.5f;  
 
-    std::stringstream ss;
-    ss << "\n--- 5x5 Depth Matrix (meters) ---\n";
+    for (const auto& pt : input_cloud.points)
+    {
+        if (!std::isfinite(pt.z)) 
+            continue;
 
-    for (int v = center_v - offset; v <= center_v + offset; ++v) {
-        for (int u = center_u - offset; u <= center_u + offset; ++u) {
-            
-            // Linear index calculation
-            int index = u + (v * width);
+            // setting FoV
+        if (pt.x > MIN_DIST && pt.x < MAX_DIST && std::abs(pt.y) < WIDTH) 
+        {
+            display_cloud.push_back(pt);
 
-            // Access the value
-            float val = depths[index];
+            if (pt.z < z_ref) 
+              z_ref = pt.z; 
+            if (pt.z > z1) 
+              z1 = pt.z;
 
-            // Add to our string with formatting
-            if (std::isnan(val)) {
-                ss << "  NaN  ";
-            } else {
-                ss << fixed << setprecision(2) << setw(7) << val;
-            }
+            valid_points++;
         }
-        ss << "\n"; // New line after each row
     }
 
-    RCLCPP_INFO(get_logger(), "%s", ss.str().c_str());
-}
+    if (!display_cloud.empty()) {
+        sensor_msgs::msg::PointCloud2 output_msg;
+        pcl::toROSMsg(display_cloud, output_msg);
+        
+        output_msg.header = msg->header;
+        pub_->publish(output_msg);
+    }
 
-private:
-  rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr mDepthSub;
+    if (valid_points > 10) 
+    {
+        float height = z1 - z_ref;
+        if (height < 0.02f) 
+          height = 0.0f;
+        std::cout << "\rPoints: " << valid_points 
+         << " | Floor: " << std::fixed << std::setprecision(3) << z_ref 
+         << " | Height: " << height << "m   " << std::flush;
+    }
+  }
+
+  rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_;
 };
 
-// The main function
 int main(int argc, char * argv[])
 {
   rclcpp::init(argc, argv);
-
-  auto depth_node = std::make_shared<MinimalDepthSubscriber>();
-
-  rclcpp::spin(depth_node);
+  rclcpp::spin(std::make_shared<PointCloudORL>());
   rclcpp::shutdown();
   return 0;
 }

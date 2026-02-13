@@ -12,6 +12,9 @@ find_package(sensor_msgs REQUIRED)
 find_package(point_cloud_transport REQUIRED) 
 find_package(cv_bridge REQUIRED)
 find_package(image_transport REQUIRED)
+find_package(pcl_conversions REQUIRED)
+find_package(pcl_msgs REQUIRED)
+find_package(pcl_ros REQUIRED)
 
 # 2. Define the Executable
 add_executable(ORL_node src/main.cpp)
@@ -23,6 +26,10 @@ ament_target_dependencies(ORL_node
   point_cloud_transport
   cv_bridge
   image_transport
+  pcl_conversions
+  pcl_msgs
+  pcl_ros
+  ## add pcl dependencies
 )
 
 # 4. Install Rules
